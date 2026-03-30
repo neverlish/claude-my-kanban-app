@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/context/AuthContext";
+import Header from "@/components/Header";
 
 type Board = {
   id: string;
@@ -11,42 +14,55 @@ type Board = {
 };
 
 export default function Home() {
+  const { user, loading: authLoading } = useAuth();
+  const router = useRouter();
   const [boards, setBoards] = useState<Board[]>([]);
   const [loading, setLoading] = useState(true);
   const [newBoardName, setNewBoardName] = useState("");
   const [isAdding, setIsAdding] = useState(false);
 
   useEffect(() => {
-    loadBoards();
-  }, []);
+    if (!authLoading && !user) {
+      router.push("/auth/login");
+      return;
+    }
+    if (!authLoading && user) loadBoards();
+  }, [authLoading, user]);
 
   async function loadBoards() {
+    if (!user) return;
+    const { data: memberships } = await supabase
+      .from("board_members")
+      .select("board_id")
+      .eq("user_id", user.id);
+
+    const boardIds = memberships?.map((m) => m.board_id) ?? [];
+    if (boardIds.length === 0) {
+      setBoards([]);
+      setLoading(false);
+      return;
+    }
+
     const { data } = await supabase
       .from("boards")
       .select("*")
+      .in("id", boardIds)
       .order("created_at", { ascending: false });
+
     if (data) setBoards(data);
     setLoading(false);
   }
 
   async function handleAddBoard() {
     const name = newBoardName.trim();
-    if (!name) return;
+    if (!name || !user) return;
 
-    const { data: board } = await supabase
-      .from("boards")
-      .insert({ name })
-      .select()
-      .single();
+    const { data: board } = await supabase.rpc("create_board", {
+      board_name: name,
+      owner_id: user.id,
+    });
 
     if (!board) return;
-
-    await supabase.from("columns").insert([
-      { board_id: board.id, name: "할 일", position: 0 },
-      { board_id: board.id, name: "진행 중", position: 1 },
-      { board_id: board.id, name: "완료", position: 2 },
-    ]);
-
     setBoards((prev) => [board, ...prev]);
     setNewBoardName("");
     setIsAdding(false);
@@ -57,8 +73,17 @@ export default function Home() {
     setBoards((prev) => prev.filter((b) => b.id !== id));
   }
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center text-gray-400">
+        로딩 중...
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
+      <Header />
       <div className="max-w-4xl mx-auto px-6 py-10">
         <div className="flex items-center justify-between mb-8">
           <h1 className="text-3xl font-bold text-gray-900">내 보드</h1>
